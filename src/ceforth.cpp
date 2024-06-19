@@ -118,7 +118,7 @@ FV<Code> dict = {
     /// @}
     /// @defgroup IO ops
     /// @{
-    CODE("base",   PUSH(0)),   // dict[0]->pf[0]->q[0] used for base
+    CODE("base",   PUSH(0)),   // dict[0].pf[0].q[0] used for base
     CODE("decimal",fout << setbase(BASE = 10)),
     CODE("hex",    fout << setbase(BASE = 16)),
     CODE("bl",     fout << " "),
@@ -151,10 +151,11 @@ FV<Code> dict = {
     /// @}
     /// @defgroup Branching ops
     /// @brief - if...then, if...else...then
-    ///     dict[-2]->pf[0,1,2,...,-1] as *last
+    ///     dict[-2].pf[0,1,2,...,-1] as *last
     ///                              \--->pf[...] if  <--+ merge
     ///                               \-->p1[...] else   |
-    ///     dict[-1]->pf[...] as *tmp -------------------+
+    ///                                                  |
+    ///     dict[-1].pf[...] as *tmp --------------------+
     /// @{
     IMMD("if",
          Bran b(_bran); Tmp t;
@@ -252,7 +253,7 @@ FV<Code> dict = {
          DICT_PUSH(w);
          Code &var = last->append(v);
          var.pf[0].token = var.token),
-    CODE("immediate", last->immediate()),
+    CODE("immediate", last->immd = 1),
     /// @}
     /// @defgroup metacompiler
     /// @brief - dict is directly used, instead of shield by macros
