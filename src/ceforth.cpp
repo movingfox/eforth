@@ -39,11 +39,13 @@ inline  DU POP()     { DU n=top; top=ss.pop(); return n; }
 /// @note:
 ///    1. Words are assembled by calling C++ initializer_list.
 ///       Currently, C++ compiler instantiates them at start up.
-///       Need to find a way to compile into a static ROM.
+///       We hope it can be statically compiled as a ROM.
+///       Using __COUNTER to automatically create index at compile
+///       time but be careful with its potential issue.
 ///    2. a degenerated lambda becomes a function pointer i.e. XT
 ///
-#define CODE(s, g)  { s, [](Code &c){ g; }, false }
-#define IMMD(s, g)  { s, [](Code &c){ g; }, true  }
+#define CODE(s, g) { s, [](Code &c){ g; }, __COUNTER__ }
+#define IMMD(s, g) { s, [](Code &c){ g; }, __COUNTER__ | Code::IMMD_FLAG }
 
 FV<Code> dict = {
     CODE("bye",    exit(0)),       // exit to OS
@@ -320,14 +322,11 @@ FV<Code> dict = {
 ///
 ///> Code Class constructors
 ///
-Code::Code(string n, XT fp,  bool im)     ///> primitive word
-    : name(n), xt(fp), attr(0) {
-    static int idx = 0;                   ///< array index
-    token = idx++;                        /// * keep dict index
-    immd  = im;
-}
+Code::Code(const string n, XT fp, U32 a)  ///< primitives word
+: name(n), xt(fp), attr(a) {}             /// * attr use __COUNTER__ as index
 
-Code::Code(string n, bool t) : name(n) {  ///< new colon word
+Code::Code(const string n, bool t)        ///< new colon word
+: name(n) {
     Code &w = find(n);                    /// * scan the dictionary
     xt    = IS_NA(w) ? NULL : w.xt;
     token = t ? dict.size() : 0;
@@ -446,7 +445,7 @@ void words() {              ///> display word list
     }
     fout << setfill(' ') << setbase(BASE) << ENDL;
 }
-void load(const char *fn) {          ///> include script from stream
+void load(const char *fn) {            ///> include script from stream
     void (*cb)(int, const char*) = fout_cb;  ///< keep output function
     string in; getline(fin, in);             ///< keep input buffers
     fout << ENDL;                            /// * flush output
@@ -460,8 +459,8 @@ void load(const char *fn) {          ///> include script from stream
 ///
 ///> Forth outer interpreter
 ///
-Code &find(string s) {      ///> scan dictionary, last to first
-    static Code NA("", (XT)-1, false);        /// NA.xt==(XT)-1
+Code &find(string s) {                ///> scan dictionary, last to first
+    static Code NA((XT)-1);           ///< NA.xt==(XT)-1
     for (int i = dict.size() - 1; i >= 0; --i) {
         if (s == dict[i].name) return dict[i];
     }
@@ -478,7 +477,7 @@ DU parse_number(string idiom) {
     case '$': b = 16; cs++; break;
     }
     char *p;
-    errno = 0;                       ///> clear overflow flag
+    errno = 0;                        ///> clear overflow flag
 #if DU==float
     DU n = (b==10)
         ? static_cast<DU>(strtof(cs, &p))
@@ -514,8 +513,8 @@ void forth_core(string idiom) {
 ///
 void forth_init() {
     Var v(10);
-    dict[0].append(v);                 /// * borrow dict[0] for base
-    last = &dict[-1];                  /// * cache last word
+    dict[0].append(v);                /// * borrow dict[0] for base
+    last = &dict[-1];                 /// * cache last word
 #if DO_WASM
     fout << "WASM build" << endl;
 #endif
