@@ -321,10 +321,12 @@ FV<Code> dict = {
 ///> Code Class constructors
 ///
 Code::Code(string n, XT fp,  bool im)     ///> primitive word
-    : name(n), xt(fp), immd(im) {
+    : name(n), xt(fp), attr(0) {
     static int idx = 0;                   ///< array index
     token = idx++;                        /// * keep dict index
+    immd  = im;
 }
+
 Code::Code(string n, bool t) : name(n) {  ///< new colon word
     Code &w = find(n);                    /// * scan the dictionary
     xt    = IS_NA(w) ? NULL : w.xt;
@@ -384,7 +386,7 @@ void _does(Code &c) {
     bool hit = false;
     for (Code &w : dict[c.token].pf) {
         if (hit) last->append(w);           // copy rest of pf
-        if (w.name=="DOES ") hit = true;
+        if (w.name=="_does") hit = true;
     }
     throw 0;                                // exit caller
 }
@@ -419,10 +421,11 @@ void see(Code &c, int dp) {  ///> disassemble a colon word
     };
     string sn = c.is_str
         ? (c.token ? "s\" " : ".\" ")+c.name+"\"" : c.name;
-    string bn = c.stage==2 ? "WHILE " : (c.stage==3 ? "AFT " : "ELSE ");
+    string bn = c.stage==2 ? "_whie" : (c.stage==3 ? "_aft" : "_else");
+
     pp(dp, sn, c.pf);
     if (c.p1.size() > 0) pp(dp, bn, c.p1);
-    if (c.p2.size() > 0) pp(dp, "THEN ", c.p2);
+    if (c.p2.size() > 0) pp(dp, "_then", c.p2);
     if (c.q.size()  > 0) for (DU i : c.q) fout << i << " ";
 }
 void words() {              ///> display word list
@@ -433,7 +436,7 @@ void words() {              ///> display word list
 #if CC_DEBUG
         fout << setw(4) << w.token << "> "
              << setw(8) << static_cast<U32>((UFP)w.xt)
-             << ":" << (w.immd ? '*' : ' ')
+             << (w.is_str ? '"' : ':') << (w.immd ? '*' : ' ')
              << w.name << "  " << ENDL;
 #else // !CC_DEBUG
         fout << "  " << w.name;
