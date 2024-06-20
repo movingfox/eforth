@@ -58,6 +58,7 @@ Code   &find(string s);      ///< dictionary scanner forward declare
 ///> data structure for dictionary entry
 ///
 struct Code {
+	static const U32 IMMD_FLAG = 0x80000000;
     string    name;          ///< name of word
     XT        xt = NULL;     ///< execution token
     FV<Code>  pf;            ///< parameter field
@@ -73,7 +74,7 @@ struct Code {
             U32 immd  :  1;  ///< immediate flag
         };
     };
-    Code(const string n, XT fp, bool im); ///> primitive 
+    Code(const string n, XT fp, U32 a);   ///> primitive word
     Code(const string n, bool t=true);    ///> colon word
     Code(XT fp) : xt(fp) { token=0; }     ///> for sub-classes
     ~Code() {}                            ///> do nothing now
