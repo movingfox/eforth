@@ -40,11 +40,11 @@ void   _lit(Code &c);        ///< numeric liternal
 void   _var(Code &c);        ///< variable and constant
 void   _tor(Code &c);        ///< >r (for..next)
 void   _dor(Code &c);        ///< swap >r >r (do..loop)
-void   _bran(Code &c);       ///< if
-void   _cycle(Code &c);      ///< repeat
-void   _for(Code &c);        ///< for...next
-void   _doloop(Code &c);     ///< do...loop
-void   _does(Code &c);       ///< does> 
+void   _bran(Code &c);       ///< if..then, if..else..then
+void   _cycle(Code &c);      ///< begin..repeat, begin..while..repeat
+void   _for(Code &c);        ///< for..next
+void   _doloop(Code &c);     ///< do..loop
+void   _does(Code &c);       ///< create..does>..
 ///
 ///> IO function declarations
 ///
@@ -73,8 +73,9 @@ struct Code {
             U32 immd  :  1;  ///< immediate flag
         };
     };
-    Code(string n, XT fp, bool im);       ///> primitive 
-    Code(string n, bool t=true);          ///> colon word
+    Code(const string n, XT fp, bool im); ///> primitive 
+    Code(const string n, bool t=true);    ///> colon word
+    Code(XT fp) : xt(fp) { token=0; }     ///> for sub-classes
     ~Code() {}                            ///> do nothing now
 
     Code &append(Code &w) { pf.push(w); return *this; } ///> add token
@@ -89,23 +90,23 @@ struct Code {
 ///
 ///> polymophic constructors
 ///
-struct Tmp : Code { Tmp() : Code(" tmp", NULL, false) { token=0;   } };
-struct Lit : Code { Lit(DU d) : Code("", _lit, false) { q.push(d); } };
-struct Var : Code { Var(DU d) : Code("", _var, false) { q.push(d); } };
+struct Tmp : Code { Tmp() : Code(NULL) {} };
+struct Lit : Code { Lit(DU d) : Code(_lit) { q.push(d); } };
+struct Var : Code { Var(DU d) : Code(_var) { q.push(d); } };
 struct Str : Code {
-    Str(string s, int t=0) : Code(s, _str, false) { token=t; is_str=1; }
+    Str(string s, int t=0) : Code(_str) { name=s; token=t; is_str=1; }
 };
 struct Bran: Code {
-    Bran(XT fp) : Code("", fp, false) {
+    Bran(XT fp) : Code(fp) {
         const char *nm[] = {  /* space postfix prevent name collision */
-            "IF ", "BEGIN ", ">R ", "FOR ", "SWAP >R >R", "DO ", "DOES "
+            "_if", "_begin", ">r", "_for", "swap >r >r", "_do", "_does"
         };
-        XT xt[] = { _bran, _cycle, _tor, _for, _dor, _doloop, _does };
-    
+        XT vt[] = { _bran, _cycle, _tor, _for, _dor, _doloop, _does };
+
         for (int i=0; i < (int)(sizeof(nm)/sizeof(const char*)); i++) {
-            if ((uintptr_t)xt[i]==(uintptr_t)fp) name = nm[i];
+            if ((uintptr_t)vt[i]==(uintptr_t)fp) name = nm[i];
         }
-        token = is_str = 0;
+        is_str = 0;
     }
 };
 ///
