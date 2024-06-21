@@ -434,6 +434,7 @@ void words() {              ///> display word list
     for (Code &w : dict) {
 #if CC_DEBUG
         fout << setw(4) << w.token << "> "
+             << (UFP)&w << ' '
              << setw(8) << static_cast<U32>((UFP)w.xt)
              << (w.is_str ? '"' : ':') << (w.immd ? '*' : ' ')
              << w.name << "  " << ENDL;
