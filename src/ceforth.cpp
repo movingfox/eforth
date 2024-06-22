@@ -27,12 +27,13 @@ void (*fout_cb)(int, const char*);     ///< forth output callback functi
 ///
 inline  DU POP()     { DU n=top; top=ss.pop(); return n; }
 #define PUSH(v)      (ss.push(top), top=(v))
-#define BOOL(f)      ((f) ? -1 : 0)
-#define VAR(i)       (*dict[(int)(i)]->pf[0]->q.data())
-#define DICT_PUSH(c) (dict.push(last=(c)))
-#define DICT_POP()   (dict.pop(), last=dict[-1])
-#define BRAN_TGT()   (dict[-2]->pf[-1]) /* branching target */
-#define BASE         (VAR(0))           /* borrow dict[0] to store base (numeric radix) */
+#define BOOL(f)      ((f) ? -1 : 0)    /* Forth use -1 as true     */
+#define IS_NA(w)     (w.xt==(XT)-1)    /* signify a word not found */
+#define VAR(i)       (*dict[(int)(i)].pf[0].q.data())
+#define DICT_PUSH(c) (dict.push((Code &)c), last=&dict[-1])
+#define DICT_POP()   (dict.pop(), last=&dict[-1])
+#define BRAN_TGT()   (dict[-2].pf[-1]) /* branching target */
+#define BASE         (VAR(0))         /* borrow dict[0] to store base (numeric radix) */
 ///
 ///> Forth Dictionary Assembler
 /// @note:
@@ -45,10 +46,10 @@ inline  DU POP()     { DU n=top; top=ss.pop(); return n; }
 ///       potential issue comes with it.
 ///    3. a degenerated lambda becomes a function pointer
 ///
-#define CODE(s, g)  (new Code(s, [](Code *c){ g; }, __COUNTER__))
-#define IMMD(s, g)  (new Code(s, [](Code *c){ g; }, __COUNTER__ | Code::IMMD_FLAG))
+#define CODE(s, g)  { s, [](Code &c){ g; }, __COUNTER__ }
+#define IMMD(s, g)  { s, [](Code &c){ g; }, __COUNTER__ | Code::IMMD_FLAG }
 
-FV<Code*> dict = {                 ///< Forth dictionary
+FV<Code> dict = {
     CODE("bye",    exit(0)),       // exit to OS
     ///
     /// @defgroup ALU ops
@@ -121,7 +122,7 @@ FV<Code*> dict = {                 ///< Forth dictionary
     /// @}
     /// @defgroup IO ops
     /// @{
-    CODE("base",   PUSH(0)),   // dict[0]->pf[0]->q[0] used for base
+    CODE("base",   PUSH(0)),   // dict[0].pf[0].q[0] used for base
     CODE("decimal",fout << setbase(BASE = 10)),
     CODE("hex",    fout << setbase(BASE = 16)),
     CODE("bl",     fout << " "),
@@ -134,7 +135,7 @@ FV<Code*> dict = {                 ///< Forth dictionary
     CODE("space",  fout << " "),
     CODE("spaces", fout << setw(POP()) << ""),
     CODE("type",   POP(); DU i_w = POP();            // decode pf and word indices
-                   fout << dict[i_w & 0xffff]->pf[i_w >> 16]->name),
+                   fout << dict[i_w & 0xffff].pf[i_w >> 16].name),
     /// @}
     /// @defgroup Literal ops
     /// @{
@@ -142,39 +143,41 @@ FV<Code*> dict = {                 ///< Forth dictionary
     IMMD(".(",     fout << word(')')),
     IMMD("\\",     string s; getline(fin, s, '\n')), // flush input
     IMMD(".\"",
-         string s = word('"').substr(1);
-         last->append(new Str(s))),
+         Str s(word('"').substr(1));
+         last->append(s)),
     IMMD("s\"",
-         string s = word('"').substr(1);
+         pad = word('"').substr(1);                  // cache in pad var
          if (compile) {
              DU i_w = (last->pf.size() << 16) | last->token; // encode pf and word indices
-             last->append(new Str(s, i_w));
-         }
-         else pad = s),
+             Str s(pad, i_w);
+             last->append(s);
+         }),
     /// @}
     /// @defgroup Branching ops
     /// @brief - if...then, if...else...then
-    ///     dict[-2]->pf[0,1,2,...,-1] as *last
+    ///     dict[-2].pf[0,1,2,...,-1] as *last
     ///                              \--->pf[...] if  <--+ merge
     ///                               \-->p1[...] else   |
-    ///     dict[-1]->pf[...] as *tmp -------------------+
+    ///                                                  |
+    ///     dict[-1].pf[...] as *tmp --------------------+
     /// @{
     IMMD("if",
-         last->append(new Bran(_bran));
-         DICT_PUSH(new Tmp())),                /// as branch target
+         Bran b(_bran); Tmp t;
+         last->append(b);
+         DICT_PUSH(t)),                        /// as branch target
     IMMD("else",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf);
-         b->stage = 1),
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf);
+         b.stage = 1),
     IMMD("then",
-         Code *b = BRAN_TGT();
-         int  s  = b->stage;                   ///< branching state
+         Code &b = BRAN_TGT();
+         int  s  = b.stage;                    ///< branching state
          if (s==0) {                           
-             b->pf.merge(last->pf);            /// * if.{pf}.then
+             b.pf.merge(last->pf);             /// * if.{pf}.then
              DICT_POP();
          }
          else {                                /// * else.{p1}.then, or
-             b->p1.merge(last->pf);            /// * then.{p1}.next
+             b.p1.merge(last->pf);             /// * then.{p1}.next
              if (s==1) DICT_POP();             /// * if..else..then
          }),
     /// @}
@@ -182,53 +185,56 @@ FV<Code*> dict = {                 ///< Forth dictionary
     /// @brief  - begin...again, begin...f until, begin...f while...repeat
     /// @{
     IMMD("begin",
-         last->append(new Bran(_cycle));
-         DICT_PUSH(new Tmp())),                /// as branch target
+         Bran b(_cycle); Tmp t;
+         last->append(b);
+         DICT_PUSH(t)),                        /// as branch target
     IMMD("while",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf);                /// * begin.{pf}.f.while
-         b->stage = 2),
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf);                 /// * begin.{pf}.f.while
+         b.stage = 2),
     IMMD("repeat",
-         Code *b = BRAN_TGT();
-         b->p1.merge(last->pf); DICT_POP()),   /// * while.{p1}.repeat
+         Code &b = BRAN_TGT();
+         b.p1.merge(last->pf); DICT_POP()),    /// * while.{p1}.repeat
     IMMD("again",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf); DICT_POP();    /// * begin.{pf}.again
-         b->stage = 1),
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf); DICT_POP();     /// * begin.{pf}.again
+         b.stage = 1),
     IMMD("until",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf); DICT_POP()),   /// * begin.{pf}.f.until
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf); DICT_POP()),    /// * begin.{pf}.f.until
     /// @}
     /// @defgrouop FOR loops
     /// @brief  - for...next, for...aft...then...next
     /// @{
     IMMD("for",
-         last->append(new Bran(_tor));
-         last->append(new Bran(_for));
-         DICT_PUSH(new Tmp())),                /// as branch target
+         Bran r(_tor); Bran b(_for); Tmp t;
+         last->append(r);
+         last->append(b);
+         DICT_PUSH(t)),                        /// as branch target
     IMMD("aft",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf);                /// * for.{pf}.aft
-         b->stage = 3),
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf);                 /// * for.{pf}.aft
+         b.stage = 3),
     IMMD("next",
-         Code *b = BRAN_TGT();
-         if (b->stage==0) b->pf.merge(last->pf);  /// * for.{pf}.next
-         else             b->p2.merge(last->pf);  /// * then.{p2}.next
+         Code &b = BRAN_TGT();
+         if (b.stage==0) b.pf.merge(last->pf); /// * for.{pf}.next
+         else            b.p2.merge(last->pf); /// * then.{p2}.next
          DICT_POP()),
     /// @}
     /// @defgrouop DO loops
     /// @brief  - do...loop, do..leave..loop
     /// @{
     IMMD("do",
-         last->append(new Bran(_dor));  ///< ( limit first -- )
-         last->append(new Bran(_doloop));
-         DICT_PUSH(new Tmp())),
+         Bran r(_dor); Bran b(_doloop); Tmp t;
+         last->append(r);              ///< ( limit first -- )
+         last->append(b);
+         DICT_PUSH(t)),
     CODE("i",      PUSH(rs[-1])),
     CODE("leave",
          rs.pop(); rs.pop(); throw 0), /// * exit loop
     IMMD("loop",
-         Code *b = BRAN_TGT();
-         b->pf.merge(last->pf);        /// * do.{pf}.loop
+         Code &b = BRAN_TGT();
+         b.pf.merge(last->pf);         /// * do.{pf}.loop
          DICT_POP()),
     /// @}
     /// @defgrouop Compiler ops
@@ -237,39 +243,45 @@ FV<Code*> dict = {                 ///< Forth dictionary
     CODE("[",      compile = false),
     CODE("]",      compile = true),
     CODE(":",
-         DICT_PUSH(new Code(word()));  // create new word
+         Code w(word());
+         DICT_PUSH(w);                 // create new word
          compile = true),
     IMMD(";", compile = false),
     CODE("constant",
-         DICT_PUSH(new Code(word()));
-         Code *w = last->append(new Lit(POP()));
-         w->pf[0]->token = w->token),
+         Code w(word()); Lit v(POP());
+         DICT_PUSH(w);
+         Code &lit = last->append(v);
+         lit.pf[0].token = lit.token),
     CODE("variable",
-         DICT_PUSH(new Code(word()));
-         Code *w = last->append(new Var(DU0));
-         w->pf[0]->token = w->token),
+         Code w(word()); Var v(DU0);
+         DICT_PUSH(w);
+         Code &var = last->append(v);
+         var.pf[0].token = var.token),
     CODE("immediate", last->immd = 1),
     /// @}
     /// @defgroup metacompiler
     /// @brief - dict is directly used, instead of shield by macros
     /// @{
-    CODE("exec",   dict[POP()]->exec()),              // w --
+    CODE("exec",   dict[POP()].exec()),           // w --
     CODE("create",
-         DICT_PUSH(new Code(word()));
-         Code *w = last->append(new Var(DU0));
-         w->pf[0]->token = w->token;
-         w->pf[0]->q.pop()),
+         Code w(word()); Var v(DU0);
+         DICT_PUSH(w);
+         Code &var = last->append(v);
+         var.pf[0].token = var.token;
+         var.pf[0].q.pop()),
     IMMD("does>",
-         last->append(new Bran(_does));
-         last->pf[-1]->token = last->token),          // keep WP
-    CODE("to",                                        // n --
-         Code *w=find(word()); if (!c) return;
-         VAR(w->token) = POP()),                      // update value
-    CODE("is",                                        // w -- 
-         DICT_PUSH(new Code(word(), false));          // create word
-         int w = POP();                               // like this word
-         last->xt = dict[w]->xt;                      // if primitive
-         last->pf = dict[w]->pf),                     // or colon word
+         Bran b(_does);
+         last->append(b);
+         last->pf[-1].token = last->token),       // keep WP
+    CODE("to",                                    // n --
+         Code &w=find(word()); if (IS_NA(w)) return;
+         VAR(w.token) = POP()),                   // update value
+    CODE("is",                                    // w --
+         Code w(word(), false);
+         DICT_PUSH(w);                            // create word
+         Code &x = dict[POP()];                   // like this word
+         last->xt = x.xt;                         // if primitive
+         last->pf.merge(x.pf)),                   // or colon word
     /// @}
     /// @defgroup Memory Access ops
     /// @{
@@ -279,17 +291,19 @@ FV<Code*> dict = {                 ///< Forth dictionary
     CODE("?",       DU w=POP(); fout << VAR(w) << " "),            // w --
     CODE("array@",  DU i=POP(); int w=POP(); PUSH(*(&VAR(w)+i))),  // w i -- n
     CODE("array!",  DU i=POP(); int w=POP(); *(&VAR(w)+i)=POP()),  // n w i --
-    CODE(",",       last->pf[0]->q.push(POP())),
+    CODE(",",       last->pf[0].q.push(POP())),
     CODE("allot",   int n = POP();                                 // n --
-                    for (int i=0; i<n; i++) last->pf[0]->q.push(0)),
+                    for (int i=0; i<n; i++) last->pf[0].q.push(DU0)),
     /// @}
     /// @defgroup Debug ops
     /// @{
     CODE("here",    PUSH(last->token)),
-    CODE("'",       Code *w = find(word()); if (w) PUSH(w->token)),
+    CODE("'",       Code &w = find(word());
+                    if (!IS_NA(w)) PUSH(w.token)),
     CODE(".s",      ss_dump(BASE)),    // dump parameter stack
     CODE("words",   words()),          // display word lists
-    CODE("see",     Code *w = find(word()); if (w) see(w, 0); fout << ENDL),
+    CODE("see",     Code &w = find(word());
+                    if (!IS_NA(w)) see(w, 0); fout << ENDL),
     CODE("depth",   PUSH(ss.size())),  // data stack depth
     /// @}
     /// @defgroup OS ops
@@ -299,79 +313,81 @@ FV<Code*> dict = {                 ///< Forth dictionary
     CODE("delay",   delay(POP())),     // n -- delay n msec
     CODE("included", load(pad.c_str())),
     CODE("forget",
-         Code *w = find(word()); if (!w) return;
-         int   t = max((int)w->token, find("boot")->token + 1);
+         Code &w = find(word()); if (IS_NA(w)) return;
+         int  t  = max((int)w.token, find("boot").token + 1);
          for (int i=dict.size(); i>t; i--) DICT_POP()),
     CODE("boot",
-         int t = find("boot")->token + 1;
+         int t = find("boot").token + 1;
          for (int i=dict.size(); i>t; i--) DICT_POP()),
 };
 ///====================================================================
 ///
 ///> Code Class constructors
 ///
-Code::Code(string s, XT fp, U32 a)       ///> primitive word
-    : name(s), xt(fp), attr(a) {}
-Code::Code(string s, bool n) : name(s) { ///< new colon word
-    Code *w = find(s);                   /// * scan the dictionary
-    xt    = w ? w->xt : NULL;
-    token = n ? dict.size() : 0;
-    if (n && w) fout << "reDef?";        /// * warn word redefined
+Code::Code(const string n, XT fp, U32 a)  ///< primitives word
+: name(n), xt(fp), attr(a) {}             /// * attr use __COUNTER__ as index
+
+Code::Code(const string n, bool t)        ///< new colon word
+: name(n) {
+    Code &w = find(n);                    /// * scan the dictionary
+    xt    = IS_NA(w) ? NULL : w.xt;
+    token = t ? dict.size() : 0;
+    if (t && xt) fout << "reDef?";        /// * warn word redefined
 }
 ///====================================================================
 ///
 ///> Primitive Functions
 ///
-void _str(Code *c)  {
-    if (!c->token) fout << c->name;
-    else { PUSH(c->token); PUSH(c->name.size()); }
+void _str(Code &c)  {
+    if (c.token) { PUSH(c.token); PUSH(c.name.size()); }
+    else fout << c.name;
 }
-void _lit(Code *c)  { PUSH(c->q[0]);  }
-void _var(Code *c)  { PUSH(c->token); }
-void _tor(Code *c)  { rs.push(POP()); }
-void _dor(Code *c)  { rs.push(ss.pop()); rs.push(POP()); }
-void _bran(Code *c) {
-    for (Code *w : (POP() ? c->pf : c->p1)) w->exec();
+void _lit(Code &c)  { PUSH(c.q[0]);  }
+void _var(Code &c)  { PUSH(c.token); }
+void _tor(Code &c)  { rs.push(POP()); }
+void _dor(Code &c)  { rs.push(ss.pop()); rs.push(POP()); }
+void _bran(Code &c) {
+    for (Code &w : (POP() ? c.pf : c.p1)) w.exec();
 }
-void _cycle(Code *c) {           ///> begin.while.repeat, begin.until
-    int b = c->stage;            ///< branching state
+void _cycle(Code &c) {           ///> begin.while.repeat, begin.until
+    int b = c.stage;             ///< branching state
     while (true) {
-        for (Code *w : c->pf) w->exec();     /// * begin..
+        for (Code &w : c.pf) w.exec();       /// * begin..
         if (b==0 && POP()!=0) break;         /// * ..until
         if (b==1)             continue;      /// * ..again
         if (b==2 && POP()==0) break;         /// * ..while..repeat
-        for (Code *w : c->p1) w->exec();
+        for (Code &w : c.p1) w.exec();
     }
 }
-void _for(Code *c) {             ///> for..next
-    int b = c->stage;                        /// * kept in register
+void _for(Code &c) {             ///> for..next
+    int b = c.stage;                         /// * kept in register
     try {
         do {
-            for (Code *w : c->pf) w->exec();
+            for (Code &w : c.pf) w.exec();
         } while (b==0 && (rs[-1]-=1) >=0);   /// * for...next only
         while (b) {                          /// * aft
-            for (Code *w : c->p2) w->exec(); /// * then...next
+            for (Code &w : c.p2) w.exec();   /// * then...next
             if ((rs[-1]-=1) < 0) break;      /// * decrement counter
-            for (Code *w : c->p1) w->exec(); /// * aft...then
+            for (Code &w : c.p1) w.exec();   /// * aft...then
         }
         rs.pop();
     }
     catch (...) { rs.pop(); }                // handle EXIT
 }
-void _doloop(Code *c) {      ///> do..loop
+void _doloop(Code &c) {      ///> do..loop
     try { 
         do {
-            for (Code *w : c->pf) w->exec();
+            for (Code &w : c.pf) w.exec();
         } while ((rs[-1]+=1) < rs[-2]);      // increment counter
         rs.pop(); rs.pop();
     }
     catch (...) {}                           // handle LEAVE
 }
-void _does(Code *c) {
+void _does(Code &c) {
     bool hit = false;
-    for (Code *w : dict[c->token]->pf) {
+    for (Code &w : dict[c.token].pf) {
         if (hit) last->append(w);           // copy rest of pf
-        if (w->name=="_does") hit = true;
+        if (w.name=="_does") hit = true;
     }
     throw 0;                                // exit caller
 }
@@ -399,39 +415,40 @@ void ss_dump(DU base) {              ///> display data stack and ok promt
     top = ss.pop();
     fout << "-> ok" << ENDL;
 }
-void see(Code *c, int dp) {  ///> disassemble a colon word
-    auto pp = [](int dp, string s, FV<Code*> v) {     ///> recursive dump with indent
+void see(Code &c, int dp) {  ///> disassemble a colon word
+    auto pp = [](int dp, string s, FV<Code> &v) {     ///> recursive dump with indent
         int i = dp; fout << ENDL; while (i--) fout << "  "; fout << s;
-        for (Code *w : v) if (dp < 3) see(w, dp + 1); /// * depth controlled
+        for (Code &w : v) if (dp < 3) see(w, dp + 1); /// * depth controlled
     };
-    string sn = c->is_str
-        ? (c->token ? "s\" " : ".\" ")+c->name+"\"" : c->name;
-    string bn = c->stage==2 ? "_while" : (c->stage==3 ? "_aft" : "_else");
-    pp(dp, sn, c->pf);
-    if (c->p1.size() > 0) pp(dp, bn, c->p1);
-    if (c->p2.size() > 0) pp(dp, "_then", c->p2);
-    if (c->q.size()  > 0) for (DU i : c->q) fout << i << " ";
+    string sn = c.is_str
+        ? (c.token ? "s\" " : ".\" ")+c.name+"\"" : c.name;
+    string bn = c.stage==2 ? "_whie" : (c.stage==3 ? "_aft" : "_else");
+
+    pp(dp, sn, c.pf);
+    if (c.p1.size() > 0) pp(dp, bn, c.p1);
+    if (c.p2.size() > 0) pp(dp, "_then", c.p2);
+    if (c.q.size()  > 0) for (DU i : c.q) fout << i << " ";
 }
 void words() {              ///> display word list
     const int WIDTH = 60;
     int x = 0;
     fout << setbase(16) << setfill('0');
-    for (Code *w : dict) {
+    for (Code &w : dict) {
 #if CC_DEBUG
-        fout << setw(4) << w->token << "> "
-             << (UFP)w << ' '
-             << setw(8) << static_cast<U32>((UFP)w->xt)
-             << (w->is_str ? '"' : ':') << (w->immd ? '*' : ' ')
-             << w->name << "  " << ENDL;
+        fout << setw(4) << w.token << "> "
+             << (UFP)&w << ' '
+             << setw(8) << static_cast<U32>((UFP)w.xt)
+             << (w.is_str ? '"' : ':') << (w.immd ? '*' : ' ')
+             << w.name << "  " << ENDL;
 #else // !CC_DEBUG
-        fout << "  " << w->name;
-        x += (w->name.size() + 2);
+        fout << "  " << w.name;
+        x += (w.name.size() + 2);
         if (x > WIDTH) { fout << ENDL; x = 0; }
 #endif // CC_DEBUG
     }
     fout << setfill(' ') << setbase(BASE) << ENDL;
 }
-void load(const char *fn) {          ///> include script from stream
+void load(const char *fn) {            ///> include script from stream
     void (*cb)(int, const char*) = fout_cb;  ///< keep output function
     string in; getline(fin, in);             ///< keep input buffers
     fout << ENDL;                            /// * flush output
@@ -445,11 +462,12 @@ void load(const char *fn) {          ///> include script from stream
 ///
 ///> Forth outer interpreter
 ///
-Code *find(string s) {      ///> scan dictionary, last to first
+Code &find(string s) {                ///> scan dictionary, last to first
+    static Code NA((XT)-1);           ///< NA.xt==(XT)-1
     for (int i = dict.size() - 1; i >= 0; --i) {
-        if (s == dict[i]->name) return dict[i];
+        if (s == dict[i].name) return dict[i];
     }
-    return NULL;            /// * word not found
+    return NA;              /// * word not found, use IS_NA(w) to check
 }
 
 DU parse_number(string idiom) {
@@ -462,7 +480,7 @@ DU parse_number(string idiom) {
     case '$': b = 16; cs++; break;
     }
     char *p;
-    errno = 0;                       ///> clear overflow flag
+    errno = 0;                        ///> clear overflow flag
 #if DU==float
     DU n = (b==10)
         ? static_cast<DU>(strtof(cs, &p))
@@ -475,16 +493,18 @@ DU parse_number(string idiom) {
 }
 
 void forth_core(string idiom) {
-    Code *w = find(idiom);            /// * search through dictionary
-    if (w) {                          /// * word found?
-        if (compile && !w->immd)      /// * are we compiling new word?
+    Code &w = find(idiom);            /// * search through dictionary
+    if (!IS_NA(w)) {                  /// * word found?
+        if (compile && !w.immd)       /// * are we compiling new word?
             last->append(w);          /// * append word ptr to it
-        else w->exec();               /// * execute forth word
+        else w.exec();                /// * execute forth word
         return;
     }
     DU  n = parse_number(idiom);      ///< try as a number
-    if (compile)                      /// * are we compiling new word?
-        last->append(new Lit(n));     /// * append numeric literal to it
+    if (compile) {                    /// * are we compiling new word?
+        Lit v(n);
+        last->append(v);              /// * append numeric literal to it
+    }
     else PUSH(n);                     /// * add value to data stack
 }
 ///====================================================================
@@ -495,8 +515,9 @@ void forth_core(string idiom) {
 ///> setup user variables
 ///
 void forth_init() {
-    last = dict[-1];                  /// * cache last word
-    dict[0]->append(new Var(10));     /// * borrow dict[0] for base
+    Var v(10);
+    dict[0].append(v);                /// * borrow dict[0] for base
+    last = &dict[-1];                 /// * cache last word
 #if DO_WASM
     fout << "WASM build" << endl;
 #endif
